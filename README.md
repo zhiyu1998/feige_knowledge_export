@@ -26,6 +26,8 @@ Excel操作 -- excel_io.py
 大部分直接安装都会在：
 > C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe
 
+仓库附带[上传模板](./飞鸽批量导入新增自定义知识模版.xlsx)
+
 2. 首先使用默认用户的数据，尝试过携带 Cookie 会失效
 
 ```python
@@ -65,3 +67,7 @@ driver.get('https://im.jinritemai.com/pc_seller_v2/main/setting/robot/knowledge'
 已经落地实现，由于商业问题所以不公开任何数据
 
 ![](./images/ref-3-1.png)
+
+## 计划
+
+- [ ] 精准匹配
