@@ -1,248 +1,268 @@
 import time
 import copy
+import logging
 
 from knowledge import Knowledge
-
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-from selenium.common.exceptions import NoSuchElementException, ElementClickInterceptedException
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import NoSuchElementException, ElementClickInterceptedException, TimeoutException
 
 from utils import find_first_chinese_hit, extract_number_from_string, contains_time, remove_bubbles
 from excel_io import append_rows_to_excel
 
 # 从第几个一分类开始获取（从1开始）
-START_ONE_CATEGORY = 1
+START_ONE_CATEGORY = 6
 # 从第几个二分类开始获取 （从0开始）
-START_SECOND_TYPE = 0
+START_SECOND_TYPE = 13
+# 单页分页的总数据
+PAGE_DATA_COUNT = 100
+# 是否只完成单个模块（某个一级分类的二级分类）
+IS_ONLY_ONE_MODULE = True
+
+
+# 配置日志
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# 常量定义
+BRAVE_PATH = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+USER_DATA_DIR = r"--user-data-dir=C:\Users\Administrator\AppData\Local\Microsoft\Edge\User Data"
+PROFILE_DIRECTORY = r"--profile-directory=Default"
+EXECUTABLE_PATH = r"C:\Users\Administrator\Desktop\迁移\msedgedriver.exe"
+URL = 'https://im.jinritemai.com/pc_seller_v2/main/setting/robot/knowledge'
+
+# XPath前缀
+XPATH_PREFIX = '/html/body/div[1]/div/div[2]/div/div[2]/div[2]/div/div/div/div[2]/div/div/div/div/div/div[1]/div/div/div/div[2]/div/div[1]/div'
+# 一级知识分类
+CATEGORY_XPATH = f'{XPATH_PREFIX}[2]/div/div[1]/div[1]/div/div'
+# 二级知识分类
+SECOND_TYPE_XPATH = f'{XPATH_PREFIX}[3]/div/div[1]/div[1]/div/div'
+# 自定义知识
+CUSTOM_KNOWLEDGE_XPATH = f'{XPATH_PREFIX}[4]/div[1]/div[1]/div/label[2]'
+# 知识列表
+ITEM_LIST_XPATH = f'{XPATH_PREFIX}[4]/div[2]/div/section/div'
+# 知识总数
+TOTAL_DATA_XPATH = f'{XPATH_PREFIX}[4]/div[2]/div/section/span'
+
+def setup_driver():
+    """
+    设置并返回Edge浏览器驱动
+    """
+    options = webdriver.EdgeOptions()
+    options.add_argument(USER_DATA_DIR)
+    options.add_argument(PROFILE_DIRECTORY)  # 加载默认的用户配置文件
+
+    service = webdriver.EdgeService(executable_path=EXECUTABLE_PATH)
+    driver = webdriver.Edge(options=options, service=service)
+    driver.implicitly_wait(10)
+    return driver
+
+def click_element(driver, xpath, timeout=10):
+    """
+    点击指定的元素
+    """
+    try:
+        element = WebDriverWait(driver, timeout).until(EC.element_to_be_clickable((By.XPATH, xpath)))
+        element.click()
+        return element
+    except (TimeoutException, ElementClickInterceptedException) as e:
+        logging.error(f"点击元素失败: {xpath}, 错误信息: {e}")
+        return None
+
+def get_elements(driver, xpath, timeout=10):
+    """
+    获取指定的元素列表
+    """
+    try:
+        elements = WebDriverWait(driver, timeout).until(EC.presence_of_all_elements_located((By.XPATH, xpath)))
+        return elements
+    except TimeoutException as e:
+        logging.error(f"获取元素失败: {xpath}, 错误信息: {e}")
+        return []
+
+def process_knowledge(driver, knowledge_only_id, child, second_type):
+    """
+    处理知识点并返回知识点列表
+    """
+    knowledge_list = []
+    click_element(driver, CUSTOM_KNOWLEDGE_XPATH)
+    time.sleep(1)
+
+    item_list = get_elements(driver, ITEM_LIST_XPATH)
+    if not item_list:
+        return knowledge_list
+
+    select_page = item_list[-1].find_elements(By.XPATH, "./ul/li")
+    all_page_select_list = select_page[-1].find_element(By.XPATH, './div/div[1]/span[2]')
+    all_page_select_list.click()
+    time.sleep(1)
+
+    try:
+        handred_in_select_list = select_page[-1].find_element(By.XPATH, './div/div[2]/div/div/div/div[2]/div/div/div/div[4]')
+        handred_in_select_list.click()
+        time.sleep(1)
+
+        total_data = driver.find_element(By.XPATH, TOTAL_DATA_XPATH).text
+        total_page_data = int(extract_number_from_string(total_data))
+    except NoSuchElementException:
+        logging.warning("当前页不存在任何元素, 即将跳过...")
+        return knowledge_list
+
+    total_pages = (total_page_data + PAGE_DATA_COUNT - 1) // PAGE_DATA_COUNT if total_page_data else 1
+    page_index = 1
+
+    while page_index <= total_pages:
+        start_index = (page_index - 1) * PAGE_DATA_COUNT
+        end_index = min(start_index + PAGE_DATA_COUNT, total_page_data)
+        current_page_data_count = end_index - start_index
+        logging.info(f"当前页有 {current_page_data_count} 数据")
+
+        for i in range(2, current_page_data_count * 2 + 2, 2):
+            knowledge_one = Knowledge()
+            knowledge_one.id = knowledge_only_id
+
+            base_xpath = f'{XPATH_PREFIX}[4]/div[2]/div/section/div[{i}]'
+            title_xpath = f'{base_xpath}/div[2]/div[1]/div/div[2]/span'
+            info_xpath = f'{base_xpath}/div[2]/div[2]'
+            editor_xpath = f'{base_xpath}/div[2]/div[1]/div/div[1]/div/button[1]'
+
+            try:
+                # 一级知识分类
+                knowledge_one.ans_type_first = child.text
+                # 二级知识分类
+                knowledge_one.ans_type_second = second_type.text
+
+                # 标题
+                title_element = driver.find_element(By.XPATH, title_xpath)
+                knowledge_one.title = title_element.text + "\n"
+                click_element(driver, editor_xpath)
+                time.sleep(1)
+
+                # 获取其他主要问法长度 方便下一步操作
+                editor_question_len_xpath = '/html/body/div[6]/div/div[2]/div/div/div[2]/div/form/div[3]/div[2]/div[1]/div[1]/div[1]/span'
+                editor_question_len = driver.find_element(By.XPATH, editor_question_len_xpath).text.split("/")[0]
+
+                for editor_index in range(int(editor_question_len)):
+                    editor_main_question = driver.find_element(By.CSS_SELECTOR, f'#questionWhitelist_{editor_index}')
+                    knowledge_one.title += editor_main_question.get_attribute('value') + "\n"
+
+                # 点击取消跳出其他主要问法
+                cancel_button_xpath = '/html/body/div[6]/div/div[2]/div/div/div[3]/div/div[2]/button[2]/span'
+                click_element(driver, cancel_button_xpath)
+
+                info_element = driver.find_element(By.XPATH, info_xpath)
+                # 触发条件
+                triggers = info_element.find_elements(By.XPATH, "./div/div[1]/div[1]")
+                # 回复内容
+                return_content = info_element.find_elements(By.XPATH, "./div/div[1]/div[2]")
+
+                for item in range(len(triggers)):
+                    # ！！！进行浅拷贝，防止出现引用问题
+                    knowledge_item = copy.copy(knowledge_one)
+                    trigger = triggers[item].text.replace("触发条件\n", "")
+                    hits = find_first_chinese_hit(trigger)
+                    knowledge_item.hits = hits
+
+                    reply = return_content[item].text
+                    ans_text_all = ""
+
+                    for ans_text in reversed(reply.split("\n")):
+                        # 如果遇到气泡
+                        if ans_text.startswith("气泡"):
+                            ans_text_all = ans_text + "|" + ans_text_all
+                        else:
+                            # 如果包含视频时间就再往上层寻找
+                            ans_text_all = ans_text
+                            if not contains_time(ans_text_all):
+                                break
+                    # 去除气泡
+                    ans_text_all = remove_bubbles(ans_text_all.rstrip("|"))
+                    knowledge_item.ans_text = ans_text_all
+                    knowledge_item.is_transfer_human = "不转人工" not in reply
+                    knowledge_item.ans_type = Knowledge.ANS_TYPE_TEXT if "不转人工" in reply else Knowledge.ANS_TYPE_HUMAN
+
+                    if "智能辅助" in reply and "全自动" not in reply:
+                        knowledge_item.intelligent_type = Knowledge.INTELLIGENT_TYPE_AUXILIARY
+                    elif "全自动" in reply and "智能辅助" not in reply:
+                        knowledge_item.intelligent_type = Knowledge.INTELLIGENT_TYPE_FULL
+                    elif "智能辅助" in reply and "全自动" in reply:
+                        knowledge_item.intelligent_type = Knowledge.INTELLIGENT_TYPE_GENERAL
+
+                    if "智能判断" in reply:
+                        knowledge_item.intelligent_reply = Knowledge.INTELLIGENT_TYPE_JUDGMENT
+                    elif "仅做推荐" in reply:
+                        knowledge_item.intelligent_reply = Knowledge.INTELLIGENT_TYPE_RECOMMADN
+                    elif "自动发送" in reply:
+                        knowledge_item.intelligent_reply = Knowledge.INTELLIGENT_TYPE_AUTO_SEND
+
+                    knowledge_item.is_turn_off_light = Knowledge.IS_TURN_OFF_LIGHT if "不提醒" in reply else Knowledge.IS_NOT_TURN_OFF_LIGHT
+
+                    logging.info(f"买家问法：{knowledge_item.title}")
+                    logging.info(f"回复类型：{knowledge_item.ans_type}")
+                    logging.info(f"回复内容：{knowledge_item.ans_text}")
+                    logging.info(f"命中次数：{str(knowledge_item.hits)}")
+                    logging.info(f"是否转人工：{knowledge_item.is_transfer_human}")
+                    logging.info(f"智能类型：{knowledge_item.intelligent_type}")
+                    logging.info(f"智能辅助回复方式：{knowledge_item.intelligent_reply}")
+                    logging.info(f"一级分类：{child.text}")
+                    logging.info(f"二级分类：{second_type.text}")
+                    logging.info(f"是否关灯：{knowledge_item.is_turn_off_light}")
+                    logging.info("----------------------------")
+
+                    knowledge_list.append(knowledge_item)
+
+            except Exception as e:
+                logging.error(f"未找到元素，停止查找: {title_xpath}, 错误信息: {e}")
+                break
+
+            knowledge_only_id += 1
+            time.sleep(1)
+
+        page_index += 1
+        next_page = select_page[-2].find_element(By.XPATH, './button')
+        next_page_is_available = not next_page.get_attribute('disabled')
+        logging.info(f'是否还有下一页：{next_page_is_available}')
+        # 点击下一页
+        if next_page_is_available:
+            next_page.click()
+        logging.info(f"正在保存 {child.text}-{second_type.text} 类第 {page_index} 知识......")
+        append_rows_to_excel('./飞鸽批量导入新增自定义知识模版.xlsx', knowledge_list, backup_interval=5)
+        time.sleep(1)
+
+    return knowledge_list
 
 if __name__ == '__main__':
-    brave_path = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
-    options = webdriver.EdgeOptions()
-    # options.binary_location = brave_path
-    # 加载已有的用户数据目录
-    options.add_argument(r"--user-data-dir=C:\Users\Administrator\AppData\Local\Microsoft\Edge\User Data")
-    options.add_argument(r"--profile-directory=Default")  # 加载默认的用户配置文件
-
-    service = webdriver.EdgeService(executable_path=r"C:\Users\Administrator\Desktop\Migration\msedgedriver.exe")
-
-    driver = webdriver.Edge(options=options, service=service)
+    driver = setup_driver()
     # 打开网页
-    driver.get('https://im.jinritemai.com/pc_seller_v2/main/setting/robot/knowledge')
+    driver.get(URL)
 
-    # 设置隐式等待 10 秒
-    driver.implicitly_wait(10)
-    # 获取分类/html/body/div[1]/div/div[2]/div/div[2]/div[2]/div/div/div/div[2]/div/div/div/div/div/div[1]/div/div/div/div[2]/div/div[1]/div[2]/div/div[1]/div[1]/div/div[1]
-    category = driver.find_elements(By.XPATH,
-                                    '/html/body/div[1]/div/div[2]/div/div[2]/div[2]/div/div/div/div[2]/div/div/div/div/div/div[1]/div/div/div/div[2]/div/div[1]/div[2]/div/div[1]/div[1]/div/div')
+    # 获取分类
+    category = get_elements(driver, CATEGORY_XPATH)
 
     knowledge_only_id = 1
 
     for category_index, child in enumerate(category[START_ONE_CATEGORY:8], start=1):
-        print(child.text)
-        # 点击分类
+        logging.info(child.text)
         time.sleep(1)
         if child.is_displayed() and child.is_enabled():
             child.click()
             time.sleep(1)
 
         # 二级分类
-        second_type_knowledge = driver.find_elements(By.XPATH,
-                                                     '/html/body/div[1]/div/div[2]/div/div[2]/div[2]/div/div/div/div[2]/div/div/div/div/div/div[1]/div/div/div/div[2]/div/div[1]/div[3]/div/div[1]/div[1]/div/div')
+        second_type_knowledge = get_elements(driver, SECOND_TYPE_XPATH)
         for second_type in second_type_knowledge[START_SECOND_TYPE:]:
             if second_type.is_displayed() and second_type.is_enabled():
                 second_type.click()
                 time.sleep(1)
 
-            # 自定义知识
-            custom_knowledge = driver.find_element(By.XPATH,
-                                                   '/html/body/div[1]/div/div[2]/div/div[2]/div[2]/div/div/div/div[2]/div/div/div/div/div/div[1]/div/div/div/div[2]/div/div[1]/div[4]/div[1]/div[1]/div/label[2]').click()
-            time.sleep(1)
+            knowledge_list = process_knowledge(driver, knowledge_only_id, child, second_type)
+            knowledge_only_id += len(knowledge_list)
+            # 如果只需要一个模块，就直接退出循环
+            if IS_ONLY_ONE_MODULE:
+                break
 
-            # 获取页面列表
-            item_list = driver.find_elements(By.XPATH,
-                                             '/html/body/div[1]/div/div[2]/div/div[2]/div[2]/div/div/div/div[2]/div/div/div/div/div/div[1]/div/div/div/div[2]/div/div[1]/div[4]/div[2]/div/section/div')
-            # 找不到数据就下一个知识
-            if not item_list:
-                continue
-            # 获取到页末的所有按钮
-            select_page = item_list[-1].find_elements(By.XPATH, "./ul/li")
-            # 选择每页显示100条
-            all_page_select_list = select_page[-1].find_element(By.XPATH, './div/div[1]/span[2]')
-            all_page_select_list.click()
-            time.sleep(1)
-            # 点击每页100条
-            try:
-                handred_in_select_list = select_page[-1].find_element(By.XPATH,
-                                                                      './div/div[2]/div/div/div/div[2]/div/div/div/div[4]')
-                handred_in_select_list.click()
-                time.sleep(1)
+        logging.info("这里即将进入下一个知识分类...")
 
-                # 获取共有多少数据
-                total_data = driver.find_element(By.XPATH,
-                                                 '/html/body/div[1]/div/div[2]/div/div[2]/div[2]/div/div/div/div[2]/div/div/div/div/div/div[1]/div/div/div/div[2]/div/div[1]/div[4]/div[2]/div/section/span').text
-                total_page_data = int(extract_number_from_string(total_data))
-            except NoSuchElementException:
-                # 如果元素不存在，打印日志并跳过当前循环
-                print(f"当前页不存在任何元素, 即将跳过...")
-                continue
-            except ElementClickInterceptedException as e:
-                # 处理点击被拦截的情况
-                print(f"元素点击被拦截: {e}")
-                # 在这里添加处理逻辑，例如等待一段时间后重试
-                time.sleep(2)
-
-            # 重置页码
-            page_index = 1
-            # input("调试使用，请输入任意键继续....")
-
-            # 计算总页数 (如果没有页码就遍历一次试一下)
-            total_pages = (total_page_data + 100 - 1) // 100 if total_page_data else 1
-
-            next_page_is_available = True
-            while page_index <= total_pages:
-                # 每一个知识点
-                knowledge_list = []
-
-                # 重置foreach_data
-                # 计算当前页的起始和结束索引
-                start_index = (page_index - 1) * 100
-                end_index = min(start_index + 100, total_page_data)
-                current_page_data_count = end_index - start_index
-                print(f"======================日志：当前页有{current_page_data_count}数据")
-                # input("调试使用，请输入任意键继续....")
-
-                for i in range(2, current_page_data_count * 2 + 2, 2):  # 假设最大到100
-                    knowledge_one = Knowledge()
-                    # 设置id
-                    knowledge_one.id = knowledge_only_id
-
-                    title_xpath = f'/html/body/div[1]/div/div[2]/div/div[2]/div[2]/div/div/div/div[2]/div/div/div/div/div/div[1]/div/div/div/div[2]/div/div[1]/div[4]/div[2]/div/section/div[{i}]/div[2]/div[1]/div/div[2]/span'
-                    info_xpath = f'/html/body/div[1]/div/div[2]/div/div[2]/div[2]/div/div/div/div[2]/div/div/div/div/div/div[1]/div/div/div/div[2]/div/div[1]/div[4]/div[2]/div/section/div[{i}]/div[2]/div[2]'
-                    editor_xpath = f'/html/body/div[1]/div/div[2]/div/div[2]/div[2]/div/div/div/div[2]/div/div/div/div/div/div[1]/div/div/div/div[2]/div/div[1]/div[4]/div[2]/div/section/div[{i}]/div[2]/div[1]/div/div[1]/div/button[1]'
-                    try:
-                        # 一级知识分类
-                        knowledge_one.ans_type_first = child.text
-                        # 二级知识分类
-                        knowledge_one.ans_type_second = second_type.text
-
-                        # 标题
-                        title_element = driver.find_element(By.XPATH, title_xpath)
-                        knowledge_one.title = title_element.text + "\n"
-                        # 获取其他主要问法
-                        editor = driver.find_element(By.XPATH, editor_xpath).click()
-                        time.sleep(1)
-                        # 获取其他主要问法长度 方便下一步操作
-                        editor_question_len = driver.find_element(By.XPATH,
-                                                                  '/html/body/div[6]/div/div[2]/div/div/div[2]/div/form/div[3]/div[2]/div[1]/div[1]/div[1]/span')
-                        editor_question_len = editor_question_len.text.split("/")[0]
-
-                        for editor_index in range(int(editor_question_len)):
-                            editor_main_question = driver.find_element(By.CSS_SELECTOR,
-                                                                       f'#questionWhitelist_{editor_index}')
-                            knowledge_one.title += editor_main_question.get_attribute('value') + "\n"
-                            # print(editor_main_question.get_attribute('value'))
-                        # 点击取消跳出其他主要问法
-                        driver.find_element(By.XPATH,
-                                            '/html/body/div[6]/div/div[2]/div/div/div[3]/div/div[2]/button[2]/span').click()
-                        # input("点击继续（调试使用）...")
-
-                        info_element = driver.find_element(By.XPATH, info_xpath)
-                        # ./div/div[1]
-                        # 触发条件
-                        triggers = info_element.find_elements(By.XPATH, "./div/div[1]/div[1]")
-                        # 回复内容
-                        return_content = info_element.find_elements(By.XPATH, "./div/div[1]/div[2]")
-                        for item in range(len(triggers)):
-                            # ！！！进行浅拷贝，防止出现引用问题
-                            knowledge_item = copy.copy(knowledge_one)
-
-                            trigger = triggers[item].text.replace("触发条件\n", "")
-                            hits = find_first_chinese_hit(trigger)
-                            knowledge_item.hits = hits
-
-                            reply = return_content[item].text
-                            ans_text_all = ""
-                            ans_text_index = -1
-                            ans_text_array = reply.split("\n")
-                            # 获取最后一个，也就是回复
-                            ans_text = ans_text_array[ans_text_index]
-                            # 处理气泡问题
-                            if ans_text.startswith("气泡"):
-                                while ans_text.startswith("气泡"):
-                                    ans_text_all = ans_text + "|" + ans_text_all
-                                    ans_text_index -= 1
-                                    ans_text = ans_text_array[ans_text_index]
-                                # 去除ans_text_all最后一个| && 去除气泡x
-                                ans_text_all = remove_bubbles(ans_text_all[:-1])
-                            else:
-                                ans_text_all = ans_text
-                                # 如果包含视频时间就再往上层寻找
-                                if contains_time(ans_text_all):
-                                    ans_text_all = ans_text_array[ans_text_index - 1]
-
-                            knowledge_item.ans_text = ans_text_all
-                            if "不转人工" in reply:
-                                knowledge_item.is_transfer_human = False
-                                knowledge_item.ans_type = Knowledge.ANS_TYPE_TEXT
-                            else:
-                                knowledge_item.is_transfer_human = True
-                                knowledge_item.ans_type = Knowledge.ANS_TYPE_HUMAN
-
-                            if "智能辅助" in reply and "全自动" not in reply:
-                                knowledge_item.intelligent_type = Knowledge.INTELLIGENT_TYPE_AUXILIARY
-                            elif "全自动" in reply and "智能辅助" not in reply:
-                                knowledge_item.intelligent_type = Knowledge.INTELLIGENT_TYPE_FULL
-                            elif "智能辅助" in reply and "全自动" in reply:
-                                knowledge_item.intelligent_type = Knowledge.INTELLIGENT_TYPE_GENERAL
-
-                            if "智能判断" in reply:
-                                knowledge_item.intelligent_reply = Knowledge.INTELLIGENT_TYPE_JUDGMENT
-                            elif "仅做推荐" in reply:
-                                knowledge_item.intelligent_reply = Knowledge.INTELLIGENT_TYPE_RECOMMADN
-                            elif "自动发送" in reply:
-                                knowledge_item.intelligent_reply = Knowledge.INTELLIGENT_TYPE_AUTO_SEND
-
-                            if "不提醒" in reply:
-                                knowledge_item.is_turn_off_light = Knowledge.IS_TURN_OFF_LIGHT
-                            else:
-                                knowledge_item.is_turn_off_light = Knowledge.IS_NOT_TURN_OFF_LIGHT
-                            print(f"买家问法：{knowledge_item.title}")
-                            print(f"回复类型：{knowledge_item.ans_type}")
-                            print(f"回复内容：{knowledge_item.ans_text}")
-                            print(f"命中次数：{str(knowledge_item.hits)}")
-                            print(f"是否转人工：{knowledge_item.is_transfer_human}")
-                            print(f"智能类型：{knowledge_item.intelligent_type}")
-                            print(f"智能辅助回复方式：{knowledge_item.intelligent_reply}")
-                            print(f"一级分类：{child.text}")
-                            print(f"二级分类：{second_type.text}")
-                            print(f"是否关灯：{knowledge_item.is_turn_off_light}")
-                            print("----------------------------")
-                            # 添加知识到列表
-                            # input("点击继续（调试使用）...")
-                            knowledge_list.append(knowledge_item)
-
-                    except Exception as e:
-                        print(f"未找到元素，停止查找: {title_xpath}, 错误信息: {e}")
-                        break
-                    # 知识点 + 1
-                    knowledge_only_id += 1
-                    # input("点击继续（调试使用）...")
-                    # 这里重置是否可以下一页，driver.find_element后如果不可以下一页返回是True，可以下一页是False
-                    time.sleep(1)
-
-                # 重置index，进行下一页
-                page_index += 1
-                # 查看是否可以点击下一页
-                next_page_is_available = not select_page[-2].find_element(By.XPATH, './button').get_attribute(
-                    'disabled')
-                print(f'=====================日志：是否还有下一页：{next_page_is_available}')
-                # 一页一页保存到excel
-                print(f"正在保存 {child.text}-{second_type.text} 类第 {page_index} 知识......")
-                append_rows_to_excel('./飞鸽批量导入新增自定义知识模版.xlsx', knowledge_list, backup_interval=5)
-                # input("点击继续（调试使用）...")
-
-            print("这里即将进入下一个知识分类...")
-            # input("这里即将进入第二个知识分类，点击继续（调试使用）...")
-    # # 关闭浏览器
     input("完成备份，按 Enter 键关闭浏览器...")
     driver.quit()
