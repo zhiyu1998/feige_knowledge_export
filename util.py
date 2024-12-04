@@ -64,8 +64,9 @@ def find_first_chinese_hit(text):
     match = re.search(pattern, text)
     if match:
         chinese_num = match.group(1)
-        if chinese_num in chinese_num_dict:
-            return f"第{chinese_num_dict[chinese_num]}次命中"
+        return f"第{chinese_num}次命中"
+        # if chinese_num in chinese_num_dict:
+        #     return f"第{chinese_num_dict[chinese_num]}次命中"
     return None
 
 

@@ -11,7 +11,8 @@ def knowledge_to_new_row(knowledge):
         '答案类型': knowledge.ans_type,
         '文字答案': knowledge.ans_text,
         '图片答案': None,
-        '绑定商品': None,
+        '绑定商品ID/系统类目': None,
+        '绑定商品自定义类目': None,
         '关联订单状态': None,
         '关联时效': None,
         '命中次数': knowledge.hits,
@@ -32,7 +33,7 @@ def append_rows_to_excel(file_path, knowledge_list, backup_interval=5):
     except FileNotFoundError:
         # 如果文件不存在，创建一个新的 DataFrame 并写入文件
         df = pd.DataFrame(columns=[
-            '知识编号', '买家问法', '答案类型', '文字答案', '图片答案', '绑定商品', '关联订单状态', '关联时效',
+            '知识编号', '买家问法', '答案类型', '文字答案', '图片答案', '绑定商品ID/系统类目', '绑定商品自定义类目', '关联订单状态', '关联时效',
             '命中次数', '是否发送转人工入口', '一级知识分类', '二级知识分类', '区分全自动/智能辅助', '智能辅助回复方式',
             '自动回复是否灭灯', '精准关键词', '答案关联知识id'
         ])

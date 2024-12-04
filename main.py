@@ -13,13 +13,13 @@ from utils import find_first_chinese_hit, extract_number_from_string, contains_t
 from excel_io import append_rows_to_excel
 
 # 从第几个一分类开始获取（从1开始）
-START_ONE_CATEGORY = 6
+START_ONE_CATEGORY = 1
 # 从第几个二分类开始获取 （从0开始）
-START_SECOND_TYPE = 13
+START_SECOND_TYPE = 0
 # 单页分页的总数据
 PAGE_DATA_COUNT = 100
 # 是否只完成单个模块（某个一级分类的二级分类）
-IS_ONLY_ONE_MODULE = True
+IS_ONLY_ONE_MODULE = False
 
 
 # 配置日志
